@@ -35,19 +35,27 @@ export function createApp(deps: { auth: AuthServer; amp: Amp; activeThreads: () 
 		},
 		{ onerror: (error) => deps.log(`mcp: ${error.message}`) },
 	)
+	const mcpNode = toNodeHandler(mcp, { onerror: (error) => deps.log(`mcp adapter: ${error.message}`) })
 	app.all(
 		'/mcp',
 		(req, res, next) => {
 			// One line per MCP HTTP request, so a client that connects but never calls tools (or keeps getting 401) is visible.
 			res.on('finish', () => {
 				const client = req.auth ? `client ${req.auth.clientId.slice(-6)}` : req.headers.authorization ? 'rejected token' : 'no token'
-				const method = req.headers['mcp-method'] ?? '-'
+				const messages = (Array.isArray(req.body) ? req.body : [req.body]) as ({ method?: string; params?: { name?: string } } | undefined)[]
+				const method =
+					messages
+						.filter((m) => m?.method)
+						.map((m) => (m!.method === 'tools/call' ? `tools/call:${m!.params?.name}` : m!.method))
+						.join(',') || '-'
 				deps.log(`http: ${req.method} /mcp ${res.statusCode} ${method} ${client} ua="${String(req.headers['user-agent'] ?? '').slice(0, 60)}"`)
 			})
 			next()
 		},
 		requireBearerAuth({ verifier: auth.verifier, resourceMetadataUrl: getOAuthProtectedResourceMetadataUrl(resourceUrl) }),
-		toNodeHandler(mcp, { onerror: (error) => deps.log(`mcp adapter: ${error.message}`) }),
+		// Parse the body here (and hand it to the adapter) so the request log can name the JSON-RPC method.
+		express.json({ limit: '4mb' }),
+		(req, res) => void mcpNode(req, res, req.body),
 	)
 	return app
 }
