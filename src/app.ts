@@ -37,6 +37,15 @@ export function createApp(deps: { auth: AuthServer; amp: Amp; activeThreads: () 
 	)
 	app.all(
 		'/mcp',
+		(req, res, next) => {
+			// One line per MCP HTTP request, so a client that connects but never calls tools (or keeps getting 401) is visible.
+			res.on('finish', () => {
+				const client = req.auth ? `client ${req.auth.clientId.slice(-6)}` : req.headers.authorization ? 'rejected token' : 'no token'
+				const method = req.headers['mcp-method'] ?? '-'
+				deps.log(`http: ${req.method} /mcp ${res.statusCode} ${method} ${client} ua="${String(req.headers['user-agent'] ?? '').slice(0, 60)}"`)
+			})
+			next()
+		},
 		requireBearerAuth({ verifier: auth.verifier, resourceMetadataUrl: getOAuthProtectedResourceMetadataUrl(resourceUrl) }),
 		toNodeHandler(mcp, { onerror: (error) => deps.log(`mcp adapter: ${error.message}`) }),
 	)
