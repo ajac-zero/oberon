@@ -95,6 +95,10 @@ plugins/amp/
 
 It uses the `.codex-plugin/plugin.json` + `.mcp.json` layout, not the newer portable `plugin.json` + `mcp.json`, because Codex 0.146 only loads MCP servers from the former.
 
+`.mcp.json` sets `"omit_tools_from": ["deferred"]`. Without it, Codex 0.160 (and ChatGPT desktop) hides plugin MCP tools behind tool search. The model then doesn't know Amp has tools, so it reaches for computer use or a browser instead.
+
+If your ChatGPT account also has a remote plugin named `amp` (for example, one created at chatgpt.com/plugins or by the plugin creator), delete it. Its `amp` server wins over this one, and this plugin's server is skipped as a duplicate.
+
 1. Add the marketplace: `codex plugin marketplace add <owner>/<repo>` (or a local checkout path), then restart the ChatGPT desktop app.
 2. In the desktop app's Plugins Directory, choose the **Oberon** marketplace and install **Amp**.
 3. Sign in when asked. Oberon's consent page asks for your passphrase.
