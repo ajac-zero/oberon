@@ -21,6 +21,7 @@ const subscriptions = new Subscriptions({
 const auth = createAuthServer({
 	publicUrl: config.publicUrl,
 	passphrase: config.passphrase,
+	log,
 	store: new JsonFile<OAuthState>(join(config.dataDir, 'oauth.json'), emptyOAuthState()),
 })
 const activity = watchActivity({

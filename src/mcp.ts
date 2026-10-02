@@ -1,7 +1,7 @@
 import { McpServer } from '@modelcontextprotocol/server'
 import { z } from 'zod'
 import { parseThreadId, type ActiveThread, type Amp, type Target } from './amp.ts'
-import { EVENT_DEFINITIONS, ListEventsParams, SubscribeParams, Subscriptions, UnsubscribeParams } from './events.ts'
+import { canonicalJson, EVENT_DEFINITIONS, ListEventsParams, SubscribeParams, Subscriptions, UnsubscribeParams } from './events.ts'
 
 const INSTRUCTIONS = `Amp is the user's coding agent. An Amp thread is one agent conversation; it runs in an orb (cloud sandbox for a project) or on a runner (one of the user's machines).
 Read threads with search and fetch; check live status with list_active_threads.
@@ -21,8 +21,9 @@ const write = { readOnlyHint: false, destructiveHint: false, openWorldHint: fals
 
 const ThreadRow = z.object({ id: z.string(), title: z.string(), url: z.string() })
 
-export function createMcpServer(deps: { amp: Amp; activeThreads: () => ActiveThread[]; subscriptions: Subscriptions; principal: string }): McpServer {
+export function createMcpServer(deps: { amp: Amp; activeThreads: () => ActiveThread[]; subscriptions: Subscriptions; principal: string; log?: (message: string) => void }): McpServer {
 	const { amp, subscriptions, principal } = deps
+	const called = (name: string) => deps.log?.(`mcp: ${name}`)
 	const server = new McpServer({ name: 'oberon', title: 'Amp', version: '0.1.0' }, { capabilities: { tools: {} }, instructions: INSTRUCTIONS })
 
 	server.registerTool(
@@ -36,6 +37,7 @@ export function createMcpServer(deps: { amp: Amp; activeThreads: () => ActiveThr
 			annotations: readOnly,
 		},
 		async ({ query }) => {
+			called('search')
 			const rows = await amp.searchThreads(query, 20)
 			const results = rows.map(({ id, title, url }) => ({ id, title, url }))
 			return { structuredContent: { results }, content: [{ type: 'text', text: JSON.stringify({ results }) }] }
@@ -53,6 +55,7 @@ export function createMcpServer(deps: { amp: Amp; activeThreads: () => ActiveThr
 			annotations: readOnly,
 		},
 		async ({ id }) => {
+			called('fetch')
 			const threadId = parseThreadId(id)
 			const [markdown, detail] = await Promise.all([amp.threadMarkdown(threadId), amp.threadDetail(threadId)])
 			const body = excerpt(markdown, 60_000)
@@ -85,6 +88,7 @@ export function createMcpServer(deps: { amp: Amp; activeThreads: () => ActiveThr
 			annotations: readOnly,
 		},
 		async () => {
+			called('list_active_threads')
 			const threads = deps.activeThreads().map((t) => ({ id: t.id, title: t.title, url: t.url, project: t.project, working: t.working, status: t.status, updated_at: t.updatedAt }))
 			return { structuredContent: { threads }, content: [{ type: 'text', text: JSON.stringify({ threads }) }] }
 		},
@@ -100,6 +104,7 @@ export function createMcpServer(deps: { amp: Amp; activeThreads: () => ActiveThr
 			annotations: readOnly,
 		},
 		async () => {
+			called('list_projects')
 			const projects = (await amp.listProjects()).map((p) => ({ ref: p.ref, name: p.name, repository_url: p.repositoryURL }))
 			return { structuredContent: { projects }, content: [{ type: 'text', text: JSON.stringify({ projects }) }] }
 		},
@@ -123,6 +128,7 @@ export function createMcpServer(deps: { amp: Amp; activeThreads: () => ActiveThr
 			annotations: write,
 		},
 		async ({ prompt, project, runner_id, runner_dir, mode, title }) => {
+			called('start_thread')
 			if (Boolean(project) === Boolean(runner_id)) throw new Error('Pass exactly one of project (orb) or runner_id (runner).')
 			if (runner_dir && !runner_id) throw new Error('runner_dir requires runner_id.')
 			const target: Target = runner_id ? { kind: 'runner', runnerId: runner_id, runnerDir: runner_dir } : { kind: 'orb', project: project! }
@@ -145,6 +151,7 @@ export function createMcpServer(deps: { amp: Amp; activeThreads: () => ActiveThr
 			annotations: write,
 		},
 		async ({ thread_id, message }) => {
+			called('send_message')
 			const { id, url } = await amp.sendMessage(parseThreadId(thread_id), message)
 			return { structuredContent: { thread_id: id, url }, content: [{ type: 'text', text: `Sent to ${url}.` }] }
 		},
@@ -152,9 +159,9 @@ export function createMcpServer(deps: { amp: Amp; activeThreads: () => ActiveThr
 
 	// ── MCP Events (ChatGPT webhook delivery; draft extension, not in the SDK) ──
 	server.server.registerCapabilities({ events: {} } as never)
-	server.server.setRequestHandler('events/list', { params: ListEventsParams }, async () => ({ events: EVENT_DEFINITIONS }))
-	server.server.setRequestHandler('events/subscribe', { params: SubscribeParams }, (params) => subscriptions.subscribe(principal, params))
-	server.server.setRequestHandler('events/unsubscribe', { params: UnsubscribeParams }, (params) => subscriptions.unsubscribe(principal, params))
+	server.server.setRequestHandler('events/list', { params: ListEventsParams }, async () => (called('events/list'), { events: EVENT_DEFINITIONS }))
+	server.server.setRequestHandler('events/subscribe', { params: SubscribeParams }, (params) => (called(`events/subscribe ${canonicalJson(params.arguments)}`), subscriptions.subscribe(principal, params)))
+	server.server.setRequestHandler('events/unsubscribe', { params: UnsubscribeParams }, (params) => (called(`events/unsubscribe ${canonicalJson(params.arguments)}`), subscriptions.unsubscribe(principal, params)))
 
 	return server
 }

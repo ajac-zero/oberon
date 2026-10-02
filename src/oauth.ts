@@ -41,8 +41,10 @@ export type AuthServer = {
 	verifier: OAuthTokenVerifier
 }
 
-export function createAuthServer(options: { publicUrl: URL; passphrase: string; store: JsonFile<OAuthState>; now?: () => number }): AuthServer {
+export function createAuthServer(options: { publicUrl: URL; passphrase: string; store: JsonFile<OAuthState>; now?: () => number; log?: (message: string) => void }): AuthServer {
 	const { store } = options
+	const log = options.log ?? (() => {})
+	const clientLabel = (clientId: string) => `${store.value.clients[clientId]?.clientName ?? 'unknown'} (${clientId.slice(-6)})`
 	const now = options.now ?? Date.now
 	const issuer = options.publicUrl.origin
 	const resource = new URL('/mcp', issuer).href
@@ -96,6 +98,7 @@ export function createAuthServer(options: { publicUrl: URL; passphrase: string; 
 		const clientId = `amb_client_${randomBytes(16).toString('hex')}`
 		const clientName = typeof body.client_name === 'string' ? body.client_name.slice(0, 100) : 'Unnamed client'
 		store.update((state) => void (state.clients[clientId] = { clientName, redirectUris, createdAt: now() }))
+		log(`oauth: registered client ${clientLabel(clientId)} redirecting to ${redirectUris.map((u) => new URL(u).host).join(', ')}`)
 		res.status(201).json({
 			client_id: clientId,
 			client_id_issued_at: Math.floor(now() / 1000),
@@ -151,15 +154,20 @@ export function createAuthServer(options: { publicUrl: URL; passphrase: string; 
 		if (parsed.fatal !== undefined) return renderPage(res, 400, errorPage(parsed.fatal))
 		const { params } = parsed
 		if (parsed.error) return redirectWith(res, params.redirectUri, { error: parsed.error, error_description: parsed.description, state: params.state })
-		if (req.body?.decision !== 'approve') return redirectWith(res, params.redirectUri, { error: 'access_denied', state: params.state })
+		if (req.body?.decision !== 'approve') {
+			log(`oauth: consent denied for ${clientLabel(params.clientId)}`)
+			return redirectWith(res, params.redirectUri, { error: 'access_denied', state: params.state })
+		}
 
 		while (failures.length && failures[0]! < now() - LOCKOUT_MS) failures.shift()
 		if (failures.length >= MAX_FAILED_ATTEMPTS) {
+			log(`oauth: consent locked out after ${failures.length} wrong passphrases`)
 			return renderPage(res, 429, consentPage({ query: query.toString(), clientName: params.clientName, redirectHost: new URL(params.redirectUri).host, error: 'Too many failed attempts. Try again in 15 minutes.' }))
 		}
 		const given = Buffer.from(sha256(typeof req.body?.passphrase === 'string' ? req.body.passphrase : ''), 'hex')
 		if (!timingSafeEqual(given, passphraseHash)) {
 			failures.push(now())
+			log(`oauth: wrong passphrase for ${clientLabel(params.clientId)}`)
 			return renderPage(res, 401, consentPage({ query: query.toString(), clientName: params.clientName, redirectHost: new URL(params.redirectUri).host, error: 'Wrong passphrase.' }))
 		}
 
@@ -175,6 +183,7 @@ export function createAuthServer(options: { publicUrl: URL; passphrase: string; 
 				expiresAt: now() + CODE_TTL_MS,
 			}
 		})
+		log(`oauth: consent approved for ${clientLabel(params.clientId)}`)
 		redirectWith(res, params.redirectUri, { code, state: params.state })
 	})
 
@@ -182,7 +191,10 @@ export function createAuthServer(options: { publicUrl: URL; passphrase: string; 
 	router.post('/oauth/token', express.urlencoded({ extended: false, limit: '16kb' }), (req, res) => {
 		res.setHeader('cache-control', 'no-store')
 		const body = (req.body ?? {}) as Record<string, string | undefined>
-		const fail = (status: number, error: string, description: string) => res.status(status).json({ error, error_description: description })
+		const fail = (status: number, error: string, description: string) => {
+			log(`oauth: token ${body.grant_type ?? '?'} rejected for ${body.client_id ? clientLabel(body.client_id) : 'no client'}: ${error} (${description})`)
+			return res.status(status).json({ error, error_description: description })
+		}
 		if (!body.client_id || !store.value.clients[body.client_id]) return fail(401, 'invalid_client', 'Unknown client_id')
 		if (!sameResource(body.resource)) return fail(400, 'invalid_target', `resource must be ${resource}`)
 
@@ -197,6 +209,7 @@ export function createAuthServer(options: { publicUrl: URL; passphrase: string; 
 			if (!body.code_verifier || challenge !== grant.codeChallenge) return fail(400, 'invalid_grant', 'PKCE verification failed')
 			let tokens
 			store.update((state) => void (tokens = issueTokens({ clientId: grant.clientId, scope: grant.scope, resource: grant.resource }, state)))
+			log(`oauth: issued tokens to ${clientLabel(body.client_id)} via ${body.grant_type}`)
 			return res.json(tokens)
 		}
 
@@ -210,6 +223,7 @@ export function createAuthServer(options: { publicUrl: URL; passphrase: string; 
 				purgeExpired(state)
 				tokens = issueTokens({ clientId: grant.clientId, scope: grant.scope, resource: grant.resource }, state)
 			})
+			log(`oauth: issued tokens to ${clientLabel(body.client_id)} via ${body.grant_type}`)
 			return res.json(tokens)
 		}
 

@@ -31,7 +31,7 @@ export function createApp(deps: { auth: AuthServer; amp: Amp; activeThreads: () 
 		(ctx) => {
 			const principal = ctx.authInfo?.extra?.principal
 			if (typeof principal !== 'string') throw new Error('Unauthenticated MCP request reached the server factory')
-			return createMcpServer({ amp: deps.amp, activeThreads: deps.activeThreads, subscriptions: deps.subscriptions, principal })
+			return createMcpServer({ amp: deps.amp, activeThreads: deps.activeThreads, subscriptions: deps.subscriptions, principal, log: deps.log })
 		},
 		{ onerror: (error) => deps.log(`mcp: ${error.message}`) },
 	)
