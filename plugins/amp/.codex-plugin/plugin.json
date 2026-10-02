@@ -1,6 +1,6 @@
 {
   "name": "amp",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Read, start, steer, and follow up on Amp coding agents through Oberon.",
   "author": {
     "name": "ajac-zero",
@@ -29,7 +29,10 @@
       "What have my Amp agents been working on today?",
       "Start an Amp agent to fix the failing tests, and tell me when it finishes.",
       "Read my latest Amp thread and summarize what changed."
-    ]
+    ],
+    "brandColor": "#0c1516",
+    "composerIcon": "./assets/amp-logo.png",
+    "logo": "./assets/amp-logo.png"
   },
   "mcpServers": "./.mcp.json"
 }

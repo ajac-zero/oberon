@@ -90,6 +90,7 @@ plugins/amp/
   .codex-plugin/plugin.json        manifest (name, Amp display metadata, skills, MCP servers)
   .mcp.json                        the Oberon MCP server (https://oberon.fly.dev/mcp)
   skills/amp/SKILL.md              tells the model to delegate coding work to Amp's tools
+  assets/amp-logo.png              Amp's app icon (from ampcode.com)
 ```
 
 It uses the `.codex-plugin/plugin.json` + `.mcp.json` layout, not the newer portable `plugin.json` + `mcp.json`, because Codex 0.146 only loads MCP servers from the former.
