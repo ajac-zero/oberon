@@ -2,6 +2,7 @@ import express, { type Express } from 'express'
 import { createMcpHandler } from '@modelcontextprotocol/server'
 import { getOAuthProtectedResourceMetadataUrl, mcpAuthMetadataRouter, requireBearerAuth } from '@modelcontextprotocol/express'
 import { toNodeHandler } from '@modelcontextprotocol/node'
+import type { TurnWait } from './activity.ts'
 import type { ActiveThread, Amp } from './amp.ts'
 import type { Subscriptions } from './events.ts'
 import type { OriginStore } from './origins.ts'
@@ -9,7 +10,7 @@ import { createMcpServer } from './mcp.ts'
 import type { AuthServer } from './oauth.ts'
 
 /** Oberon's HTTP surface: OAuth discovery and endpoints, plus the bearer-protected MCP endpoint at /mcp. */
-export function createApp(deps: { auth: AuthServer; amp: Amp; activeThreads: () => ActiveThread[]; subscriptions: Subscriptions; origins: OriginStore; log: (message: string) => void }): Express {
+export function createApp(deps: { auth: AuthServer; amp: Amp; activeThreads: () => ActiveThread[]; subscriptions: Subscriptions; origins: OriginStore; waitForTurnEnd?: (id: string, timeoutMs: number) => Promise<TurnWait>; log: (message: string) => void }): Express {
 	const { auth } = deps
 	const resourceUrl = new URL(auth.resource)
 	const app = express()
@@ -32,7 +33,7 @@ export function createApp(deps: { auth: AuthServer; amp: Amp; activeThreads: () 
 		(ctx) => {
 			const principal = ctx.authInfo?.extra?.principal
 			if (typeof principal !== 'string') throw new Error('Unauthenticated MCP request reached the server factory')
-			return createMcpServer({ amp: deps.amp, activeThreads: deps.activeThreads, subscriptions: deps.subscriptions, origins: deps.origins, principal, log: deps.log })
+			return createMcpServer({ amp: deps.amp, activeThreads: deps.activeThreads, subscriptions: deps.subscriptions, origins: deps.origins, principal, waitForTurnEnd: deps.waitForTurnEnd, log: deps.log })
 		},
 		{ onerror: (error) => deps.log(`mcp: ${error.message}`) },
 	)

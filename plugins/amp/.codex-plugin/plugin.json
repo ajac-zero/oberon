@@ -1,6 +1,6 @@
 {
   "name": "amp",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "Read, start, steer, and follow up on Amp coding agents through Oberon.",
   "author": {
     "name": "ajac-zero",

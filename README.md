@@ -22,6 +22,7 @@ Oberon is an MCP server that connects ChatGPT to Amp. In ChatGPT it appears as *
 | `list_projects` | read | Amp projects to start orb threads in. |
 | `start_thread` | write | Start an agent in an orb (`project`) or on a runner (`runner_id`, `runner_dir`). Returns immediately. |
 | `send_message` | write | Send a follow-up message to an existing thread. Returns immediately. |
+| `wait_for_thread` | read | Opt-in (`OBERON_ENABLE_WAIT_TOOL`). Waits up to `timeout_seconds` (default 45, 5–55) for a working thread's turn to end, then returns its final message. If it times out, call it again. |
 | `archive_thread` | write | Archive a thread, or unarchive it with `unarchive: true`. |
 
 | Event | Filters | Payload |
@@ -62,6 +63,7 @@ Quick-tunnel URLs change on every restart, and ChatGPT stores the URL, so use a 
 | `OBERON_DATA_DIR` | `.data` | OAuth and subscription state (JSON, mode 0600). |
 | `AMP_BIN` | `amp` | Amp CLI binary. |
 | `OBERON_THREAD_LABEL` | `chatgpt` | Label added to threads the bridge starts. |
+| `OBERON_ENABLE_WAIT_TOOL` | off | Set to `1` or `true` to add the `wait_for_thread` tool, for clients where MCP Events don't fire (ChatGPT desktop's local mode). |
 
 ## Deploy to Fly.io
 
