@@ -3,7 +3,8 @@ import { z } from 'zod'
 import { parseThreadId, type ActiveThread, type Amp, type Target } from './amp.ts'
 import { canonicalJson, EVENT_DEFINITIONS, ListEventsParams, SubscribeParams, Subscriptions, UnsubscribeParams } from './events.ts'
 
-const INSTRUCTIONS = `Amp is the user's coding agent. An Amp thread is one agent conversation; it runs in an orb (cloud sandbox for a project) or on a runner (one of the user's machines).
+const INSTRUCTIONS = `Amp is the user's coding agent. These tools are the way to use Amp: do not operate the Amp app or ampcode.com with computer use or a browser, and do not SSH into the user's machines.
+An Amp thread is one agent conversation; it runs in an orb (cloud sandbox for a project) or on a runner (one of the user's machines).
 Read threads with search and fetch; check live status with list_active_threads.
 start_thread and send_message return at once while Amp keeps working. To act when the work is done, subscribe to the thread.turn_ended event for that thread_id instead of polling.
 Always give the user the thread URL. Do not send a message to the thread that triggered a thread.turn_ended event unless the user asked for that, to avoid loops.`

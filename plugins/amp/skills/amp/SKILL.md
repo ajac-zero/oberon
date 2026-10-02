@@ -5,7 +5,7 @@ description: Delegate coding work to Amp agents and report on it. Use when the u
 
 # Working with Amp
 
-Amp is the user's coding agent. Do coding work through the Amp tools from this plugin. Do not SSH into the user's machines, run the `amp` CLI, or edit their code with shell commands yourself.
+Amp is the user's coding agent. Use the Amp tools from this plugin for everything Amp-related: reading threads, checking status, starting agents, and messaging them. Never operate the Amp app or ampcode.com with computer use or a browser, never SSH into the user's machines, and never run the `amp` CLI or edit their code with shell commands yourself. The tools do all of that directly.
 
 ## Choose the tool
 
