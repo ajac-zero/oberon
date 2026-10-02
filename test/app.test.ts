@@ -18,6 +18,7 @@ const REDIRECT = 'https://chatgpt.com/connector_platform_oauth_redirect'
 const THREAD = 'T-01a0f696-61fc-74da-a09c-6725b91a38f8'
 
 const started: { prompt: string; target: Target; mode?: string }[] = []
+const archived_: { id: string; archived: boolean }[] = []
 const fakeAmp: Amp = {
 	searchThreads: async (query) => [{ id: THREAD, title: `match for ${query}`, url: `https://ampcode.com/threads/${THREAD}`, updatedAt: '' }],
 	threadMarkdown: async () => '# Thread\n\n## User\n\nFix it\n\n## Assistant\n\nFixed.',
@@ -28,6 +29,7 @@ const fakeAmp: Amp = {
 		return { id: THREAD, url: `https://ampcode.com/threads/${THREAD}` }
 	},
 	sendMessage: async (id) => ({ id, url: `https://ampcode.com/threads/${id}` }),
+	archiveThread: async (id, archived) => void archived_.push({ id, archived }),
 }
 const active: ActiveThread[] = [{ id: THREAD, title: 'Fix the bug', url: `https://ampcode.com/threads/${THREAD}`, project: 'amp-mcp', status: 'working', working: true, executorConnected: true, updatedAt: '' }]
 
@@ -168,7 +170,7 @@ test('MCP 2026-07-28: discover advertises events; tools and event subscription w
 	await client.connect(new StreamableHTTPClientTransport(new URL(`${base}/mcp`), { requestInit: { headers } }))
 
 	const { tools } = await client.listTools()
-	assert.deepEqual(tools.map((t) => t.name).sort(), ['fetch', 'list_active_threads', 'list_projects', 'search', 'send_message', 'start_thread'])
+	assert.deepEqual(tools.map((t) => t.name).sort(), ['archive_thread', 'fetch', 'list_active_threads', 'list_projects', 'search', 'send_message', 'start_thread'])
 	assert.equal(tools.find((t) => t.name === 'start_thread')!.annotations?.readOnlyHint, false)
 	assert.equal(tools.find((t) => t.name === 'search')!.annotations?.readOnlyHint, true)
 
@@ -182,6 +184,13 @@ test('MCP 2026-07-28: discover advertises events; tools and event subscription w
 	const ok = await client.callTool({ name: 'start_thread', arguments: { prompt: 'Fix the flaky test', runner_id: 'villahermosa', runner_dir: '/home/coder/amp-mcp', mode: 'low' } })
 	assert.deepEqual(started.at(-1), { prompt: 'Fix the flaky test', target: { kind: 'runner', runnerId: 'villahermosa', runnerDir: '/home/coder/amp-mcp' }, mode: 'low', title: undefined })
 	assert.equal((ok.structuredContent as { thread_id: string }).thread_id, THREAD)
+
+	const archivedResult = await client.callTool({ name: 'archive_thread', arguments: { thread_id: `https://ampcode.com/threads/${THREAD}` } })
+	assert.deepEqual(archivedResult.structuredContent, { thread_id: THREAD, url: `https://ampcode.com/threads/${THREAD}`, archived: true })
+	await client.callTool({ name: 'archive_thread', arguments: { thread_id: THREAD, unarchive: true } })
+	assert.deepEqual(archived_, [{ id: THREAD, archived: true }, { id: THREAD, archived: false }])
+	assert.equal((await client.callTool({ name: 'archive_thread', arguments: { thread_id: 'not-a-thread' } })).isError, true)
+	assert.equal(archived_.length, 2, 'an invalid thread ID never reaches Amp')
 
 	const { events } = await client.request({ method: 'events/list', params: {} } as never, z.object({ events: z.array(z.object({ name: z.string(), payloadSchema: z.unknown() })) }))
 	assert.deepEqual(events.map((e) => e.name), [TURN_ENDED])

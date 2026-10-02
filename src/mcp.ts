@@ -1,6 +1,6 @@
 import { McpServer } from '@modelcontextprotocol/server'
 import { z } from 'zod'
-import { parseThreadId, type ActiveThread, type Amp, type Target } from './amp.ts'
+import { parseThreadId, threadUrl, type ActiveThread, type Amp, type Target } from './amp.ts'
 import { canonicalJson, EVENT_DEFINITIONS, ListEventsParams, SubscribeParams, Subscriptions, UnsubscribeParams } from './events.ts'
 
 const INSTRUCTIONS = `Amp is the user's coding agent. These tools are the way to use Amp: do not operate the Amp app or ampcode.com with computer use or a browser, and do not SSH into the user's machines.
@@ -155,6 +155,28 @@ export function createMcpServer(deps: { amp: Amp; activeThreads: () => ActiveThr
 			called('send_message')
 			const { id, url } = await amp.sendMessage(parseThreadId(thread_id), message)
 			return { structuredContent: { thread_id: id, url }, content: [{ type: 'text', text: `Sent to ${url}.` }] }
+		},
+	)
+
+	server.registerTool(
+		'archive_thread',
+		{
+			title: 'Archive an Amp thread',
+			description: "Use this to archive an Amp thread when the user is done with it, or to unarchive one. Archiving only hides the thread from Amp's lists; it can be undone.",
+			inputSchema: z.object({
+				thread_id: z.string().describe('Thread ID (T-…) or thread URL'),
+				unarchive: z.boolean().optional().describe('Set true to restore an archived thread instead'),
+			}),
+			outputSchema: z.object({ thread_id: z.string(), url: z.string(), archived: z.boolean() }),
+			annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false, idempotentHint: true },
+		},
+		async ({ thread_id, unarchive }) => {
+			called('archive_thread')
+			const id = parseThreadId(thread_id)
+			const archived = !unarchive
+			await amp.archiveThread(id, archived)
+			const result = { thread_id: id, url: threadUrl(id), archived }
+			return { structuredContent: result, content: [{ type: 'text', text: `${archived ? 'Archived' : 'Unarchived'} ${result.url}.` }] }
 		},
 	)
 

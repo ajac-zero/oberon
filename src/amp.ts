@@ -42,6 +42,7 @@ export interface Amp {
 	listProjects(): Promise<Project[]>
 	startThread(input: { prompt: string; target: Target; mode?: Mode; title?: string }): Promise<{ id: string; url: string }>
 	sendMessage(id: string, message: string): Promise<{ id: string; url: string }>
+	archiveThread(id: string, archived: boolean): Promise<void>
 }
 
 const THREAD_ID = /^T-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
@@ -113,6 +114,10 @@ export function createAmpCli(options: { bin: string; label: string }): Amp {
 			if (title) args.push('--title', title)
 			args.push('--label', options.label)
 			return createdThread(await run(args, 120_000))
+		},
+
+		async archiveThread(id, archived) {
+			await run(['threads', 'archive', parseThreadId(id), ...(archived ? [] : ['--unarchive'])])
 		},
 
 		async sendMessage(id, message) {

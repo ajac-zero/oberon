@@ -13,6 +13,7 @@ Amp is the user's coding agent. Use the Amp tools from this plugin for everythin
 - See what is running now: `list_active_threads`.
 - Start work: `start_thread`. Pass `project` (from `list_projects`) to run in an orb, or `runner_id` and `runner_dir` to run on one of the user's machines. Write the prompt as a complete, self-contained task. Use mode `low` for small tasks and `high` for hard ones.
 - Steer or answer a running agent: `send_message` with the thread ID.
+- Clean up: `archive_thread` hides a finished thread (reversible with `unarchive: true`).
 
 ## Follow up when work finishes
 

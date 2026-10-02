@@ -22,6 +22,7 @@ Oberon is an MCP server that connects ChatGPT to Amp. In ChatGPT it appears as *
 | `list_projects` | read | Amp projects to start orb threads in. |
 | `start_thread` | write | Start an agent in an orb (`project`) or on a runner (`runner_id`, `runner_dir`). Returns immediately. |
 | `send_message` | write | Send a follow-up message to an existing thread. Returns immediately. |
+| `archive_thread` | write | Archive a thread, or unarchive it with `unarchive: true`. |
 
 | Event | Filters | Payload |
 | --- | --- | --- |
