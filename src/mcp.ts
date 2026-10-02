@@ -1,12 +1,13 @@
 import { McpServer } from '@modelcontextprotocol/server'
 import { z } from 'zod'
 import { parseThreadId, threadUrl, type ActiveThread, type Amp, type Target } from './amp.ts'
+import type { OriginStore } from './origins.ts'
 import { canonicalJson, EVENT_DEFINITIONS, ListEventsParams, SubscribeParams, Subscriptions, UnsubscribeParams } from './events.ts'
 
 const INSTRUCTIONS = `Amp is the user's coding agent. These tools are the way to use Amp: do not operate the Amp app or ampcode.com with computer use or a browser, and do not SSH into the user's machines.
 An Amp thread is one agent conversation; it runs in an orb (cloud sandbox for a project) or on a runner (one of the user's machines).
 Read threads with search and fetch; check live status with list_active_threads.
-start_thread and send_message return at once while Amp keeps working. To act when the work is done, subscribe to the thread.turn_ended event for that thread_id instead of polling.
+start_thread and send_message return at once while Amp keeps working. To act when the work is done, subscribe to the thread.turn_ended event instead of polling: use thread_id for one thread, or origin "oberon" to hear only about threads started through start_thread (not threads the user chats with directly). The event's outcome says whether the turn completed, errored, was cancelled, or needs_approval; the optional outcomes argument filters on it.
 Always give the user the thread URL. Do not send a message to the thread that triggered a thread.turn_ended event unless the user asked for that, to avoid loops.`
 
 /** Keeps the start and end of a long text: the request and the outcome matter most. */
@@ -22,8 +23,8 @@ const write = { readOnlyHint: false, destructiveHint: false, openWorldHint: fals
 
 const ThreadRow = z.object({ id: z.string(), title: z.string(), url: z.string() })
 
-export function createMcpServer(deps: { amp: Amp; activeThreads: () => ActiveThread[]; subscriptions: Subscriptions; principal: string; log?: (message: string) => void }): McpServer {
-	const { amp, subscriptions, principal } = deps
+export function createMcpServer(deps: { amp: Amp; activeThreads: () => ActiveThread[]; subscriptions: Subscriptions; origins: OriginStore; principal: string; log?: (message: string) => void }): McpServer {
+	const { amp, subscriptions, origins, principal } = deps
 	const called = (name: string) => deps.log?.(`mcp: ${name}`)
 	const server = new McpServer({ name: 'oberon', title: 'Amp', version: '0.1.0' }, { capabilities: { tools: {} }, instructions: INSTRUCTIONS })
 
@@ -134,8 +135,9 @@ export function createMcpServer(deps: { amp: Amp; activeThreads: () => ActiveThr
 			if (runner_dir && !runner_id) throw new Error('runner_dir requires runner_id.')
 			const target: Target = runner_id ? { kind: 'runner', runnerId: runner_id, runnerDir: runner_dir } : { kind: 'orb', project: project! }
 			const { id, url } = await amp.startThread({ prompt, target, mode, title })
+			origins.record(id)
 			const result = { thread_id: id, url, executor: runner_id ? `runner:${runner_id}` : `orb:${project}` }
-			return { structuredContent: result, content: [{ type: 'text', text: `Started ${url}. Subscribe to thread.turn_ended with thread_id ${id} to follow up when it finishes.` }] }
+			return { structuredContent: result, content: [{ type: 'text', text: `Started ${url}. Subscribe to thread.turn_ended with thread_id ${id} (or origin "oberon") to follow up when it finishes.` }] }
 		},
 	)
 

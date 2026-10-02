@@ -9,6 +9,7 @@ import type { ActiveThread, Amp, Target } from '../src/amp.ts'
 import { createApp } from '../src/app.ts'
 import { publishTurnEnded } from '../src/bridge.ts'
 import { Subscriptions, TURN_ENDED, type SubscriptionState } from '../src/events.ts'
+import { emptyOriginState, OriginStore, type OriginState } from '../src/origins.ts'
 import { createAuthServer, emptyOAuthState, type OAuthState } from '../src/oauth.ts'
 import { JsonFile } from '../src/store.ts'
 import type { WebhookRequest } from '../src/webhook.ts'
@@ -43,6 +44,8 @@ const subscriptions = new Subscriptions({
 	},
 })
 
+const origins = new OriginStore(new JsonFile<OriginState>(undefined, emptyOriginState()))
+
 let server: Server
 let base: string
 
@@ -51,7 +54,7 @@ before(async () => {
 	await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
 	base = `http://127.0.0.1:${(server.address() as { port: number }).port}`
 	const auth = createAuthServer({ publicUrl: new URL(base), passphrase: PASSPHRASE, store: new JsonFile<OAuthState>(undefined, emptyOAuthState()) })
-	server.on('request', createApp({ auth, amp: fakeAmp, activeThreads: () => active, subscriptions, log: () => {} }))
+	server.on('request', createApp({ auth, amp: fakeAmp, activeThreads: () => active, subscriptions, origins, log: () => {} }))
 })
 after(() => server.close())
 
@@ -206,10 +209,10 @@ test('MCP 2026-07-28: discover advertises events; tools and event subscription w
 
 	// A turn ends in a thread that does not match the filter: nothing is delivered.
 	const before = deliveries.length
-	await publishTurnEnded({ amp: fakeAmp, subscriptions }, { ...active[0]!, id: 'T-00000000-0000-0000-0000-000000000000', working: false })
+	await publishTurnEnded({ amp: fakeAmp, subscriptions, origins }, { ...active[0]!, id: 'T-00000000-0000-0000-0000-000000000000', working: false })
 	assert.equal(deliveries.length, before)
 
-	await publishTurnEnded({ amp: fakeAmp, subscriptions, now: () => new Date('2026-10-01T12:05:00Z') }, { ...active[0]!, working: false })
+	await publishTurnEnded({ amp: fakeAmp, subscriptions, origins, now: () => new Date('2026-10-01T12:05:00Z') }, { ...active[0]!, working: false })
 	const delivered = deliveries.at(-1)!
 	assert.equal(delivered.headers['x-mcp-subscription-id'], sub.id)
 	assert.doesNotThrow(() => new Webhook(secret).verify(delivered.body, delivered.headers))
@@ -217,9 +220,9 @@ test('MCP 2026-07-28: discover advertises events; tools and event subscription w
 	assert.equal(event.name, TURN_ENDED)
 	assert.equal(event.eventId, delivered.headers['webhook-id'])
 	assert.equal(event.timestamp, '2026-10-01T12:05:00.000Z')
-	assert.deepEqual(event.data, { thread_id: THREAD, title: 'Fix the bug', url: `https://ampcode.com/threads/${THREAD}`, project: 'amp-mcp', agent_state: 'idle', final_message: 'Fixed the bug and pushed.', final_message_truncated: false })
+	assert.deepEqual(event.data, { thread_id: THREAD, title: 'Fix the bug', url: `https://ampcode.com/threads/${THREAD}`, project: 'amp-mcp', origin: 'oberon', agent_state: 'idle', outcome: 'completed', final_message: 'Fixed the bug and pushed.', final_message_truncated: false })
 
 	await client.request({ method: 'events/unsubscribe', params: { name: TURN_ENDED, arguments: { thread_id: THREAD }, delivery: { mode: 'webhook', url: 'https://receiver.example.com/cb_1' } } } as never, z.object({}))
-	assert.deepEqual(subscriptions.matching(TURN_ENDED, { thread_id: THREAD, project: 'amp-mcp' }), [])
+	assert.deepEqual(subscriptions.matching(TURN_ENDED, { thread_id: THREAD, project: 'amp-mcp', origin: 'oberon' }), [])
 	await client.close()
 })

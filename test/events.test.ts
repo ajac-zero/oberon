@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
+import { createHash } from 'node:crypto'
 import { Webhook } from 'standardwebhooks'
-import { CALLBACK_ENDPOINT_ERROR, canonicalJson, DEFAULT_TTL_MS, MAX_TTL_MS, MIN_TTL_MS, Subscriptions, TURN_ENDED, type SubscriptionState } from '../src/events.ts'
+import { OUTCOMES } from '../src/amp.ts'
+import { CALLBACK_ENDPOINT_ERROR, canonicalJson, DEFAULT_TTL_MS, EVENT_DEFINITIONS, matchesOutcome, MAX_TTL_MS, MIN_TTL_MS, Subscriptions, TURN_ENDED, type SubscriptionState } from '../src/events.ts'
 import { JsonFile } from '../src/store.ts'
 import type { WebhookRequest, WebhookResponse } from '../src/webhook.ts'
 
@@ -100,7 +102,7 @@ test('matching applies filters and expiry; unsubscribe is idempotent', async () 
 	const { subs, advance } = setup(receiver().send)
 	await subs.subscribe('owner', subscribeParams({ thread_id: 'T-1' }))
 	await subs.subscribe('owner', subscribeParams({ project: 'web' }))
-	const ids = (facts: { thread_id: string; project: string }) => subs.matching(TURN_ENDED, facts).map((s) => JSON.stringify(s.arguments)).sort()
+	const ids = (facts: { thread_id: string; project: string; origin?: 'oberon' | 'other' }) => subs.matching(TURN_ENDED, { origin: 'other', ...facts }).map((s) => JSON.stringify(s.arguments)).sort()
 	assert.deepEqual(ids({ thread_id: 'T-1', project: 'api' }), ['{"thread_id":"T-1"}'])
 	assert.deepEqual(ids({ thread_id: 'T-9', project: 'web' }), ['{"project":"web"}'])
 	assert.deepEqual(ids({ thread_id: 'T-1', project: 'web' }), ['{"project":"web"}', '{"thread_id":"T-1"}'])
@@ -119,7 +121,7 @@ test('delivery retries transient failures with the same event ID and stops on 41
 	const { subs, sleeps, store } = setup(r.send)
 	await subs.subscribe('owner', subscribeParams({}))
 	const event = { eventId: 'evt_1', name: TURN_ENDED, timestamp: '2026-10-01T12:00:00.000Z', data: { thread_id: 'T-1' } }
-	await subs.deliver(subs.matching(TURN_ENDED, { thread_id: 'T-1', project: 'p' }), event)
+	await subs.deliver(subs.matching(TURN_ENDED, { thread_id: 'T-1', project: 'p', origin: 'other' }), event)
 	const attempts = r.events()
 	assert.equal(attempts.length, 3)
 	assert.deepEqual(new Set(attempts.map((a) => a.headers['webhook-id'])), new Set(['evt_1']))
@@ -130,14 +132,14 @@ test('delivery retries transient failures with the same event ID and stops on 41
 	const gone = receiver([{ status: 410, body: '' }])
 	const g = setup(gone.send)
 	await g.subs.subscribe('owner', subscribeParams({}))
-	await g.subs.deliver(g.subs.matching(TURN_ENDED, { thread_id: 'T-1', project: 'p' }), event)
+	await g.subs.deliver(g.subs.matching(TURN_ENDED, { thread_id: 'T-1', project: 'p', origin: 'other' }), event)
 	assert.equal(gone.events().length, 1)
 	assert.deepEqual(g.store.value.subscriptions, {}, '410 removes the subscription')
 
 	const rejected = receiver([{ status: 400, body: '' }])
 	const b = setup(rejected.send)
 	await b.subs.subscribe('owner', subscribeParams({}))
-	await b.subs.deliver(b.subs.matching(TURN_ENDED, { thread_id: 'T-1', project: 'p' }), event)
+	await b.subs.deliver(b.subs.matching(TURN_ENDED, { thread_id: 'T-1', project: 'p', origin: 'other' }), event)
 	assert.equal(rejected.events().length, 1, 'permanent 4xx is not retried')
 	assert.equal(Object.keys(b.store.value.subscriptions).length + Object.keys(store.value.subscriptions).length, 2)
 })
@@ -148,7 +150,7 @@ test('secret rotation signs with both secrets during the window, then only the n
 	await subs.subscribe('owner', subscribeParams({}, secret(1)))
 	await subs.subscribe('owner', subscribeParams({}, secret(2)))
 	const deliver = async (id: string) => {
-		await subs.deliver(subs.matching(TURN_ENDED, { thread_id: 'T-1', project: 'p' }), { eventId: id, name: TURN_ENDED, timestamp: '', data: {} })
+		await subs.deliver(subs.matching(TURN_ENDED, { thread_id: 'T-1', project: 'p', origin: 'other' }), { eventId: id, name: TURN_ENDED, timestamp: '', data: {} })
 		return r.events().at(-1)!
 	}
 	const during = await deliver('evt_a')
@@ -158,4 +160,54 @@ test('secret rotation signs with both secrets during the window, then only the n
 	const after = await deliver('evt_b')
 	assert.ok(!signedWith(secret(1), after))
 	assert.ok(signedWith(secret(2), after))
+})
+
+// ── origin and outcomes filters ──────────────────────────────────────────────
+
+test('a subscription without the new arguments keeps the ID it had before they existed', async () => {
+	const { subs, store } = setup(receiver().send)
+	const legacy = async (args: Record<string, unknown>) => (await subs.subscribe('owner', subscribeParams(args))).id
+	// Hand-built from the original derivation: sha256 over canonical JSON of [principal, url, name, args].
+	const before = (args: string) => `sub_${createHash('sha256').update(`["owner","${URL_A}","thread.turn_ended",${args}]`).digest('hex').slice(0, 32)}`
+	assert.equal(await legacy({}), before('{}'))
+	assert.equal(await legacy({ thread_id: 'T-1', project: 'p' }), before('{"project":"p","thread_id":"T-1"}'))
+	assert.deepEqual(store.value.subscriptions[before('{}')]!.arguments, {}, 'no defaults are written into stored arguments')
+	// Spelling out the default is the same subscription, not a second one that would double-deliver.
+	assert.equal(await legacy({ origin: 'any' }), before('{}'))
+	assert.notEqual(await legacy({ origin: 'oberon' }), before('{}'))
+})
+
+test('outcomes are validated and their order does not change the subscription', async () => {
+	const { subs } = setup(receiver().send)
+	const a = await subs.subscribe('owner', subscribeParams({ outcomes: ['error', 'needs_approval'] }))
+	const b = await subs.subscribe('owner', subscribeParams({ outcomes: ['needs_approval', 'error', 'error'] }))
+	assert.equal(a.id, b.id)
+	await assert.rejects(subs.subscribe('owner', subscribeParams({ outcomes: ['idle'] })), /Invalid arguments/)
+	await assert.rejects(subs.subscribe('owner', subscribeParams({ outcomes: [] })), /Invalid arguments/)
+	await assert.rejects(subs.subscribe('owner', subscribeParams({ origin: 'mine' })), /Invalid arguments/)
+})
+
+test('origin "oberon" matches only threads Oberon started; no origin argument matches both', async () => {
+	const { subs } = setup(receiver().send)
+	await subs.subscribe('owner', subscribeParams({ origin: 'oberon' }))
+	await subs.subscribe('owner', subscribeParams({}, secret(1), {}))
+	const count = (origin: 'oberon' | 'other') => subs.matching(TURN_ENDED, { thread_id: 'T-1', project: 'p', origin }).length
+	assert.equal(count('oberon'), 2)
+	assert.equal(count('other'), 1)
+})
+
+test('matchesOutcome applies the outcomes filter only when present', () => {
+	assert.equal(matchesOutcome({}, 'error'), true)
+	assert.equal(matchesOutcome({ outcomes: ['completed'] }, 'error'), false)
+	assert.equal(matchesOutcome({ outcomes: ['completed', 'error'] }, 'error'), true)
+})
+
+test('the schemas advertised to clients describe the new argument and payload fields', () => {
+	const def = EVENT_DEFINITIONS.find((e) => e.name === TURN_ENDED)!
+	const input = def.inputSchema as { properties: Record<string, { enum?: string[]; items?: { enum: string[] } }> }
+	assert.deepEqual(input.properties.origin!.enum, ['oberon', 'any'])
+	assert.deepEqual(input.properties.outcomes!.items!.enum, [...OUTCOMES])
+	const payload = def.payloadSchema as { required: string[]; properties: Record<string, { enum?: string[] }> }
+	assert.ok(payload.required.includes('origin') && payload.required.includes('outcome'))
+	assert.deepEqual(payload.properties.origin!.enum, ['oberon', 'other'])
 })

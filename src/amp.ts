@@ -23,9 +23,26 @@ export type ThreadDetail = {
 	/** Protocol ID of the message the agent state refers to; stable for one agent turn. */
 	agentStateMessageId: string | undefined
 	lastAssistantText: string
-	/** The export has caught up with a finished turn: agent not running and the last message is a completed assistant message. */
+	/** The export has caught up with a finished turn: the agent state is a stopped state and, for idle, the last message is a completed assistant message. */
 	settled: boolean
 	updatedAt: string
+}
+
+/** Why a turn ended, derived from the thread's settled agent state. */
+export const OUTCOMES = ['completed', 'error', 'cancelled', 'needs_approval'] as const
+export type Outcome = (typeof OUTCOMES)[number]
+
+/**
+ * Maps a settled `lastKnownAgentState.state` to an outcome. Returns undefined for
+ * states that are running or unrecognized, so callers can tell "not settled yet"
+ * from "settled as completed".
+ */
+export function outcomeOfState(state: string | undefined): Outcome | undefined {
+	if (state === 'idle') return 'completed'
+	if (state === 'error') return 'error'
+	if (state === 'cancelled') return 'cancelled'
+	if (state?.startsWith('awaiting_') || state?.startsWith('awaiting-')) return 'needs_approval'
+	return undefined
 }
 
 export type Project = { ref: string; name: string; repositoryURL: string }
@@ -136,10 +153,9 @@ type ExportedThread = {
 	messages: { role: string; state?: { type?: string }; content: { type: string; text?: string }[] }[]
 }
 
-const RUNNING_STATES = new Set(['working', 'tool_use', 'streaming'])
-
 export function toThreadDetail(raw: ExportedThread): ThreadDetail {
 	const state = raw.meta?.lastKnownAgentState?.state
+	const outcome = outcomeOfState(state)
 	const last = raw.messages.at(-1)
 	const lastAssistant = raw.messages.findLast((m) => m.role === 'assistant' && m.content.some((c) => c.type === 'text' && c.text?.trim()))
 	return {
@@ -149,7 +165,9 @@ export function toThreadDetail(raw: ExportedThread): ThreadDetail {
 		agentState: state,
 		agentStateMessageId: raw.meta?.lastKnownAgentState?.messageID,
 		lastAssistantText: (lastAssistant?.content ?? []).flatMap((c) => (c.type === 'text' && c.text ? [c.text] : [])).join('\n\n'),
-		settled: state !== undefined && !RUNNING_STATES.has(state) && last?.role === 'assistant' && last.state?.type === 'complete',
+		// Only recognized stopped states settle. Mid-turn states (working, tool_use, running_tools, compacting, …) and
+		// unknown ones keep waiting. error/cancelled/awaiting_* can end without a completed assistant message, so only idle requires one.
+		settled: outcome !== undefined && (outcome !== 'completed' || (last?.role === 'assistant' && last.state?.type === 'complete')),
 		updatedAt: raw.updatedAt ?? '',
 	}
 }

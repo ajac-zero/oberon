@@ -17,7 +17,10 @@ Amp is the user's coding agent. Use the Amp tools from this plugin for everythin
 
 ## Follow up when work finishes
 
-`start_thread` and `send_message` return immediately while Amp keeps working. When the user wants a result, subscribe to the `thread.turn_ended` event with the thread's `thread_id`, then act on the event's `final_message`. Call `fetch` when you need the full thread. Do not poll.
+`start_thread` and `send_message` return immediately while Amp keeps working. When the user wants a result, subscribe to the `thread.turn_ended` event, then act on the event's `final_message`. Call `fetch` when you need the full thread. Do not poll.
+
+- Following up on threads you started: subscribe with `origin: "oberon"`. It fires only for threads started through `start_thread`, not for threads the user is chatting with directly in Amp, which would otherwise be noise. Add `thread_id` to watch a single thread.
+- Read the event's `outcome`: `completed`, `error`, `cancelled`, or `needs_approval` (the agent is waiting for approval; tell the user rather than retrying). Subscribe with `outcomes` (for example `["error", "needs_approval"]`) to hear only about those.
 
 Do not answer a `thread.turn_ended` event by messaging the same thread unless the user asked for that; it would start a loop.
 

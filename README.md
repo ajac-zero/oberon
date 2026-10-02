@@ -26,7 +26,7 @@ Oberon is an MCP server that connects ChatGPT to Amp. In ChatGPT it appears as *
 
 | Event | Filters | Payload |
 | --- | --- | --- |
-| `thread.turn_ended` | `thread_id`, `project` (both optional) | thread ID, title, URL, project, agent state, last agent message |
+| `thread.turn_ended` | `thread_id`, `project`, `origin` (`oberon` or `any`, default `any`), `outcomes` (subset of `completed`, `error`, `cancelled`, `needs_approval`); all optional | thread ID, title, URL, project, `origin` (`oberon` or `other`), raw `agent_state`, `outcome`, last agent message |
 
 `search` and `fetch` use ChatGPT's standard company-knowledge shapes. Threads started by Oberon get the `chatgpt` label.
 
@@ -111,6 +111,8 @@ Point `.mcp.json` at your own deployment if you run Oberon elsewhere.
 
 - **Protocol.** Oberon uses the v2 MCP TypeScript SDK (`2026-07-28`, `server/discover`). The SDK has no MCP Events support yet, so `events/list`, `events/subscribe`, and `events/unsubscribe` are custom request handlers, and `events: {}` is added to the server capabilities.
 - **Event source.** `amp top --stream-jsonl` streams live thread state. A thread going from `working: true` to `working: false` is an ended turn. Oberon then waits for `amp threads export` to catch up and sends the final message. This usually takes a few seconds.
+- **Origin.** `start_thread` records the ID of every thread it starts in `origins.json` in the data dir. That file is the only source of truth for `origin`: the `chatgpt` label and thread titles are not consulted. A subscription with `origin: "oberon"` skips threads the user chats with directly in Amp, so it is the right filter for following up on work ChatGPT started. Threads started before this file existed, or outside Oberon, count as `other`.
+- **Outcome.** The settled `meta.lastKnownAgentState.state` of the thread export maps to `outcome`: `idle` → `completed`, `error` → `error`, `cancelled` → `cancelled`, `awaiting_*` → `needs_approval`. Any other state after settling is reported as `completed`, with the raw state still in `agent_state`. Settling waits only for recognized stopped states, so mid-turn states (`tool_use`, `running_tools`, …) are never published.
 - **Delivery.** Each event is signed with [Standard Webhooks](https://www.standardwebhooks.com/) using the secret ChatGPT supplied. Transient failures are retried with backoff, keeping the same event ID. A `410` response removes the subscription. Callbacks must be HTTPS and resolve to public addresses; this is checked at connect time, and redirects are not followed. Callback URLs are verified with a challenge before a subscription is stored.
 - **Subscriptions.** Subscription IDs are derived from the principal, callback URL, event name, and canonical arguments, so refreshes are idempotent. The default lifetime is 24 hours, clamped to between 1 hour and 7 days. During secret rotation, deliveries are signed with both secrets for an hour. State survives restarts.
 - **Auth.** Oberon runs a built-in single-user OAuth 2.1 server: dynamic client registration, a passphrase consent page, PKCE S256 only, RFC 9207 `iss` on every redirect (not advertised in metadata, because Codex 0.146 and earlier reject servers that advertise it), tokens bound to the `/mcp` resource, single-use codes, rotating refresh tokens, and only SHA-256 hashes stored. After 10 wrong passphrases in 15 minutes, the consent page locks.

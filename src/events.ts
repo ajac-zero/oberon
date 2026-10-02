@@ -1,6 +1,7 @@
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto'
 import { ProtocolError } from '@modelcontextprotocol/server'
 import { z } from 'zod'
+import { OUTCOMES, type Outcome } from './amp.ts'
 import type { JsonFile } from './store.ts'
 import { MAX_EVENT_BYTES, signedHeaders, type SendWebhook } from './webhook.ts'
 
@@ -11,6 +12,15 @@ export const TURN_ENDED = 'thread.turn_ended'
 export const TurnEndedArguments = z.strictObject({
 	thread_id: z.string().describe('Only notify for this Amp thread ID (T-…). Omit to watch every thread.').optional(),
 	project: z.string().describe('Only notify for threads in this project, by the name list_active_threads shows. Omit for all projects.').optional(),
+	origin: z
+		.enum(['oberon', 'any'])
+		.describe('"oberon": only threads started through this server\'s start_thread tool (the default recommendation when following up on work you started). "any" (default): every thread, including ones the user chats with directly in Amp.')
+		.optional(),
+	outcomes: z
+		.array(z.enum(OUTCOMES))
+		.min(1)
+		.describe('Only notify for these outcomes: completed (agent idle), error, cancelled, needs_approval (agent waiting for approval). Omit for all outcomes.')
+		.optional(),
 })
 export type TurnEndedArguments = z.infer<typeof TurnEndedArguments>
 
@@ -19,7 +29,9 @@ export const TurnEndedPayload = z.strictObject({
 	title: z.string(),
 	url: z.string(),
 	project: z.string(),
-	agent_state: z.string().describe('Amp agent state after the turn, e.g. idle or error.'),
+	origin: z.enum(['oberon', 'other']).describe('"oberon" if the thread was started through start_thread, otherwise "other".'),
+	agent_state: z.string().describe('Raw Amp agent state after the turn, e.g. idle or error. Prefer outcome.'),
+	outcome: z.enum(OUTCOMES).describe('How the turn ended: completed, error, cancelled, or needs_approval. Unrecognized agent states are reported as completed.'),
 	final_message: z.string().describe("The agent's last text message, possibly truncated. Call fetch for the full thread."),
 	final_message_truncated: z.boolean(),
 })
@@ -42,10 +54,19 @@ export const EVENT_DEFINITIONS = [
 ]
 
 /** What a turn-ended event is matched against before the bridge fetches its payload. */
-export type TurnEndedFacts = { thread_id: string; project: string }
+export type TurnEndedFacts = { thread_id: string; project: string; origin: 'oberon' | 'other' }
 
 export function matchesTurnEnded(args: TurnEndedArguments, facts: TurnEndedFacts): boolean {
-	return (args.thread_id === undefined || args.thread_id === facts.thread_id) && (args.project === undefined || args.project === facts.project)
+	return (
+		(args.thread_id === undefined || args.thread_id === facts.thread_id) &&
+		(args.project === undefined || args.project === facts.project) &&
+		(args.origin !== 'oberon' || facts.origin === 'oberon')
+	)
+}
+
+/** The outcome is only known after the thread export settles, so it is matched separately from the other filters. */
+export function matchesOutcome(args: TurnEndedArguments, outcome: Outcome): boolean {
+	return args.outcomes === undefined || args.outcomes.includes(outcome)
 }
 
 // ── Subscriptions ────────────────────────────────────────────────────────────
@@ -119,7 +140,13 @@ function parseEventArguments(name: string, args: unknown): TurnEndedArguments {
 	if (name !== TURN_ENDED) throw new ProtocolError(INVALID_PARAMS, `Unknown event: ${name}`)
 	const parsed = TurnEndedArguments.safeParse(args)
 	if (!parsed.success) throw new ProtocolError(INVALID_PARAMS, `Invalid arguments for ${name}: ${z.prettifyError(parsed.error)}`)
-	return parsed.data
+	// Normalize so equivalent filters share one subscription ID: "any" is the default, and outcome order is irrelevant.
+	const { origin, outcomes, ...rest } = parsed.data
+	return {
+		...rest,
+		...(origin === 'oberon' ? { origin } : {}),
+		...(outcomes ? { outcomes: OUTCOMES.filter((o) => outcomes.includes(o)) } : {}),
+	}
 }
 
 function grantedTtl(requested: number | null | undefined): number {

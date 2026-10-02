@@ -5,6 +5,7 @@ import { createApp } from './app.ts'
 import { publishTurnEnded } from './bridge.ts'
 import { loadConfig } from './config.ts'
 import { Subscriptions, type SubscriptionState } from './events.ts'
+import { emptyOriginState, OriginStore, type OriginState } from './origins.ts'
 import { createAuthServer, emptyOAuthState, type OAuthState } from './oauth.ts'
 import { JsonFile } from './store.ts'
 import { sendWebhook } from './webhook.ts'
@@ -18,6 +19,7 @@ const subscriptions = new Subscriptions({
 	send: sendWebhook,
 	log,
 })
+const origins = new OriginStore(new JsonFile<OriginState>(join(config.dataDir, 'origins.json'), emptyOriginState()))
 const auth = createAuthServer({
 	publicUrl: config.publicUrl,
 	passphrase: config.passphrase,
@@ -29,11 +31,11 @@ const activity = watchActivity({
 	log,
 	onTurnEnded: (thread) => {
 		log(`turn ended: ${thread.id} (${thread.title})`)
-		publishTurnEnded({ amp, subscriptions }, thread).catch((error: Error) => log(`publish ${thread.id}: ${error.message}`))
+		publishTurnEnded({ amp, subscriptions, origins }, thread).catch((error: Error) => log(`publish ${thread.id}: ${error.message}`))
 	},
 })
 
-const app = createApp({ auth, amp, activeThreads: activity.current, subscriptions, log })
+const app = createApp({ auth, amp, activeThreads: activity.current, subscriptions, origins, log })
 const server = app.listen(config.port, config.host, () => {
 	log(`oberon listening on http://${config.host}:${config.port}`)
 	log(`ChatGPT MCP server URL: ${auth.resource}`)
