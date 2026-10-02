@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "amp": {
+      "type": "http",
+      "url": "https://oberon.fly.dev/mcp"
+    }
+  }
+}

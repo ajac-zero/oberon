@@ -1,0 +1,35 @@
+{
+  "name": "amp",
+  "version": "0.1.0",
+  "description": "Read, start, steer, and follow up on Amp coding agents through Oberon.",
+  "author": {
+    "name": "ajac-zero",
+    "url": "https://github.com/ajac-zero"
+  },
+  "homepage": "https://oberon.fly.dev",
+  "keywords": [
+    "amp",
+    "coding-agent",
+    "mcp",
+    "oberon"
+  ],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Amp",
+    "shortDescription": "Run and follow up on Amp coding agents.",
+    "longDescription": "Search and read your Amp threads, start Amp agents in orbs or on your runners, send them follow-up instructions, and get notified when an agent finishes. Served by Oberon.",
+    "developerName": "ajac-zero",
+    "category": "Developer Tools",
+    "capabilities": [
+      "Read",
+      "Write"
+    ],
+    "websiteURL": "https://ampcode.com",
+    "defaultPrompt": [
+      "What have my Amp agents been working on today?",
+      "Start an Amp agent to fix the failing tests, and tell me when it finishes.",
+      "Read my latest Amp thread and summarize what changed."
+    ]
+  },
+  "mcpServers": "./.mcp.json"
+}

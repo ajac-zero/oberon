@@ -1,0 +1,20 @@
+{
+  "name": "oberon",
+  "interface": {
+    "displayName": "Oberon"
+  },
+  "plugins": [
+    {
+      "name": "amp",
+      "source": {
+        "source": "local",
+        "path": "./plugins/amp"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Developer Tools"
+    }
+  ]
+}
