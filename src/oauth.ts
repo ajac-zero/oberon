@@ -145,7 +145,7 @@ export function createAuthServer(options: { publicUrl: URL; passphrase: string; 
 		const parsed = readAuthorizeParams(req.query as Record<string, unknown>)
 		if (parsed.fatal !== undefined) return renderPage(res, 400, errorPage(parsed.fatal))
 		if (parsed.error) return redirectWith(res, parsed.params.redirectUri, { error: parsed.error, error_description: parsed.description, state: parsed.params.state })
-		renderPage(res, 200, consentPage({ query: new URLSearchParams(req.query as Record<string, string>).toString(), clientName: parsed.params.clientName, redirectHost: new URL(parsed.params.redirectUri).host }))
+		renderPage(res, 200, consentPage({ query: new URLSearchParams(req.query as Record<string, string>).toString(), clientName: parsed.params.clientName, redirectHost: new URL(parsed.params.redirectUri).host }), parsed.params.redirectUri)
 	})
 
 	router.post('/oauth/authorize', express.urlencoded({ extended: false, limit: '16kb' }), (req, res) => {
@@ -162,13 +162,13 @@ export function createAuthServer(options: { publicUrl: URL; passphrase: string; 
 		while (failures.length && failures[0]! < now() - LOCKOUT_MS) failures.shift()
 		if (failures.length >= MAX_FAILED_ATTEMPTS) {
 			log(`oauth: consent locked out after ${failures.length} wrong passphrases`)
-			return renderPage(res, 429, consentPage({ query: query.toString(), clientName: params.clientName, redirectHost: new URL(params.redirectUri).host, error: 'Too many failed attempts. Try again in 15 minutes.' }))
+			return renderPage(res, 429, consentPage({ query: query.toString(), clientName: params.clientName, redirectHost: new URL(params.redirectUri).host, error: 'Too many failed attempts. Try again in 15 minutes.' }), params.redirectUri)
 		}
 		const given = Buffer.from(sha256(typeof req.body?.passphrase === 'string' ? req.body.passphrase : ''), 'hex')
 		if (!timingSafeEqual(given, passphraseHash)) {
 			failures.push(now())
 			log(`oauth: wrong passphrase for ${clientLabel(params.clientId)}`)
-			return renderPage(res, 401, consentPage({ query: query.toString(), clientName: params.clientName, redirectHost: new URL(params.redirectUri).host, error: 'Wrong passphrase.' }))
+			return renderPage(res, 401, consentPage({ query: query.toString(), clientName: params.clientName, redirectHost: new URL(params.redirectUri).host, error: 'Wrong passphrase.' }), params.redirectUri)
 		}
 
 		const code = token('amb_code')
@@ -262,10 +262,16 @@ function isAllowedRedirectUri(raw: string): boolean {
 
 const escapeHtml = (value: string) => value.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`)
 
-function renderPage(res: Response, status: number, html: string) {
+/**
+ * `redirectUri` is the client's registered redirect. Browsers apply `form-action`
+ * to the redirect that follows a form POST, so the consent form must allow it,
+ * including Codex's loopback `http://127.0.0.1:<port>` callback.
+ */
+function renderPage(res: Response, status: number, html: string, redirectUri?: string) {
+	const formAction = ["'self'", ...(redirectUri ? [new URL(redirectUri).origin] : [])].join(' ')
 	res
 		.status(status)
-		.setHeader('content-security-policy', "default-src 'none'; style-src 'unsafe-inline'; form-action 'self' https:; frame-ancestors 'none'")
+		.setHeader('content-security-policy', `default-src 'none'; style-src 'unsafe-inline'; form-action ${formAction}; frame-ancestors 'none'`)
 		.setHeader('x-frame-options', 'DENY')
 		.setHeader('cache-control', 'no-store')
 		.type('html')

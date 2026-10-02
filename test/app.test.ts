@@ -113,6 +113,13 @@ test('OAuth: registration, passphrase consent, PKCE, single-use codes, refresh r
 	const consent = await fetch(`${base}/oauth/authorize?${new URLSearchParams({ response_type: 'code', client_id, redirect_uri: REDIRECT, code_challenge: challenge, code_challenge_method: 'S256', state: 'st8' })}`)
 	assert.equal(consent.status, 200)
 	assert.match(await consent.text(), /Oberon passphrase/)
+	// Browsers apply form-action to the post-submit redirect: it must allow this client's redirect origin, and only that.
+	assert.match(consent.headers.get('content-security-policy')!, /form-action 'self' https:\/\/chatgpt\.com;/)
+
+	// Codex's loopback callback is plain http on 127.0.0.1; the consent page must allow it.
+	const loopback = (await (await register(['http://127.0.0.1:61840/callback/x'])).json()) as { client_id: string }
+	const loopbackConsent = await fetch(`${base}/oauth/authorize?${new URLSearchParams({ response_type: 'code', client_id: loopback.client_id, redirect_uri: 'http://127.0.0.1:61840/callback/x', code_challenge: challenge, code_challenge_method: 'S256' })}`)
+	assert.match(loopbackConsent.headers.get('content-security-policy')!, /form-action 'self' http:\/\/127\.0\.0\.1:61840;/)
 
 	const wrong = await authorize(client_id, challenge, 'not the passphrase')
 	assert.equal(wrong.status, 401)
