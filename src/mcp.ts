@@ -1,12 +1,18 @@
 import { McpServer } from '@modelcontextprotocol/server'
 import { z } from 'zod'
+import type { TurnWait } from './activity.ts'
+import { waitForThread } from './bridge.ts'
 import { parseThreadId, threadUrl, type ActiveThread, type Amp, type Target } from './amp.ts'
 import { canonicalJson, EVENT_DEFINITIONS, ListEventsParams, SubscribeParams, Subscriptions, UnsubscribeParams } from './events.ts'
+
+export const WAIT_DEFAULT_SECONDS = 45
+export const WAIT_MIN_SECONDS = 5
+export const WAIT_MAX_SECONDS = 55
 
 const INSTRUCTIONS = `Amp is the user's coding agent. These tools are the way to use Amp: do not operate the Amp app or ampcode.com with computer use or a browser, and do not SSH into the user's machines.
 An Amp thread is one agent conversation; it runs in an orb (cloud sandbox for a project) or on a runner (one of the user's machines).
 Read threads with search and fetch; check live status with list_active_threads.
-start_thread and send_message return at once while Amp keeps working. To act when the work is done, subscribe to the thread.turn_ended event for that thread_id instead of polling.
+start_thread and send_message return at once while Amp keeps working. To act when the work is done, subscribe to the thread.turn_ended event for that thread_id instead of polling. If events do not fire in this client and a wait_for_thread tool is available, call it with the thread_id instead: it returns when the turn ends or after its timeout, and if finished is false, call it again. Never poll fetch in a loop to see whether a thread finished.
 Always give the user the thread URL. Do not send a message to the thread that triggered a thread.turn_ended event unless the user asked for that, to avoid loops.`
 
 /** Keeps the start and end of a long text: the request and the outcome matter most. */
@@ -22,7 +28,7 @@ const write = { readOnlyHint: false, destructiveHint: false, openWorldHint: fals
 
 const ThreadRow = z.object({ id: z.string(), title: z.string(), url: z.string() })
 
-export function createMcpServer(deps: { amp: Amp; activeThreads: () => ActiveThread[]; subscriptions: Subscriptions; principal: string; log?: (message: string) => void }): McpServer {
+export function createMcpServer(deps: { amp: Amp; activeThreads: () => ActiveThread[]; subscriptions: Subscriptions; principal: string; waitForTurnEnd?: (id: string, timeoutMs: number) => Promise<TurnWait>; sleep?: (ms: number) => Promise<void>; log?: (message: string) => void }): McpServer {
 	const { amp, subscriptions, principal } = deps
 	const called = (name: string) => deps.log?.(`mcp: ${name}`)
 	const server = new McpServer({ name: 'oberon', title: 'Amp', version: '0.1.0' }, { capabilities: { tools: {} }, instructions: INSTRUCTIONS })
@@ -135,7 +141,7 @@ export function createMcpServer(deps: { amp: Amp; activeThreads: () => ActiveThr
 			const target: Target = runner_id ? { kind: 'runner', runnerId: runner_id, runnerDir: runner_dir } : { kind: 'orb', project: project! }
 			const { id, url } = await amp.startThread({ prompt, target, mode, title })
 			const result = { thread_id: id, url, executor: runner_id ? `runner:${runner_id}` : `orb:${project}` }
-			return { structuredContent: result, content: [{ type: 'text', text: `Started ${url}. Subscribe to thread.turn_ended with thread_id ${id} to follow up when it finishes.` }] }
+			return { structuredContent: result, content: [{ type: 'text', text: `Started ${url}. Subscribe to thread.turn_ended with thread_id ${id} to follow up when it finishes (or call wait_for_thread if that tool is available).` }] }
 		},
 	)
 
@@ -157,6 +163,37 @@ export function createMcpServer(deps: { amp: Amp; activeThreads: () => ActiveThr
 			return { structuredContent: { thread_id: id, url }, content: [{ type: 'text', text: `Sent to ${url}.` }] }
 		},
 	)
+
+	if (deps.waitForTurnEnd) {
+		const waitForTurnEnd = deps.waitForTurnEnd
+		server.registerTool(
+			'wait_for_thread',
+			{
+				title: 'Wait for an Amp agent to finish',
+				description: `Use this after start_thread or send_message, when events are not available, to wait for the agent's current turn to end instead of polling fetch. Waits up to timeout_seconds (default ${WAIT_DEFAULT_SECONDS}, ${WAIT_MIN_SECONDS}–${WAIT_MAX_SECONDS}) and returns the agent's final message. If finished is false, the agent is still working: call it again. A thread that is not working returns its current state immediately.`,
+				inputSchema: z.object({
+					thread_id: z.string().describe('Thread ID (T-…) or thread URL'),
+					timeout_seconds: z.number().optional().describe(`Seconds to wait; default ${WAIT_DEFAULT_SECONDS}, clamped to ${WAIT_MIN_SECONDS}–${WAIT_MAX_SECONDS}`),
+				}),
+				outputSchema: z.object({
+					thread_id: z.string(),
+					url: z.string(),
+					finished: z.boolean(),
+					agent_state: z.string(),
+					final_message: z.string(),
+					final_message_truncated: z.boolean(),
+					hint: z.string().optional(),
+				}),
+				annotations: readOnly,
+			},
+			async ({ thread_id, timeout_seconds }) => {
+				called('wait_for_thread')
+				const seconds = Math.min(WAIT_MAX_SECONDS, Math.max(WAIT_MIN_SECONDS, timeout_seconds ?? WAIT_DEFAULT_SECONDS))
+				const result = await waitForThread({ amp, waitForTurnEnd, sleep: deps.sleep }, parseThreadId(thread_id), seconds * 1000)
+				return { structuredContent: result, content: [{ type: 'text', text: JSON.stringify(result) }] }
+			},
+		)
+	}
 
 	server.registerTool(
 		'archive_thread',

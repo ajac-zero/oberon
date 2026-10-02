@@ -33,7 +33,7 @@ const activity = watchActivity({
 	},
 })
 
-const app = createApp({ auth, amp, activeThreads: activity.current, subscriptions, log })
+const app = createApp({ auth, amp, activeThreads: activity.current, subscriptions, waitForTurnEnd: config.enableWaitTool ? activity.waitForTurnEnd : undefined, log })
 const server = app.listen(config.port, config.host, () => {
 	log(`oberon listening on http://${config.host}:${config.port}`)
 	log(`ChatGPT MCP server URL: ${auth.resource}`)

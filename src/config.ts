@@ -14,6 +14,8 @@ export type Config = {
 	ampBin: string
 	/** Label added to every thread the bridge starts, so they are easy to find in Amp. */
 	threadLabel: string
+	/** Register the `wait_for_thread` tool (for clients where MCP Events do not fire). */
+	enableWaitTool: boolean
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
@@ -28,6 +30,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
 		dataDir: resolve(env.OBERON_DATA_DIR ?? '.data'),
 		ampBin: env.AMP_BIN ?? 'amp',
 		threadLabel: env.OBERON_THREAD_LABEL ?? 'chatgpt',
+		enableWaitTool: ['1', 'true'].includes(env.OBERON_ENABLE_WAIT_TOOL?.trim().toLowerCase() ?? ''),
 	}
 }
 

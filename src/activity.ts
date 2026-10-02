@@ -22,10 +22,65 @@ export function applySnapshot(known: Map<string, ActiveThread>, snapshot: TopSna
 	return ended
 }
 
+/** How a wait for a turn end resolved: nothing was running, the turn ended, or the timeout elapsed first. */
+export type TurnWait = 'idle' | 'ended' | 'timeout'
+
+/** Parked callers waiting for a thread's turn to end. */
+export class TurnWaiters {
+	#waiters = new Map<string, Set<() => void>>()
+
+	/** Resolves 'ended' on the next `ended(id)`, or 'timeout' after `timeoutMs`. */
+	wait(id: string, timeoutMs: number): Promise<'ended' | 'timeout'> {
+		return new Promise((resolve) => {
+			const set = this.#waiters.get(id) ?? new Set()
+			this.#waiters.set(id, set)
+			const done = (result: 'ended' | 'timeout') => {
+				clearTimeout(timer)
+				set.delete(onEnded)
+				if (set.size === 0 && this.#waiters.get(id) === set) this.#waiters.delete(id)
+				resolve(result)
+			}
+			const onEnded = () => done('ended')
+			const timer = setTimeout(() => done('timeout'), timeoutMs)
+			set.add(onEnded)
+		})
+	}
+
+	/** Releases everyone waiting on `id`. */
+	ended(id: string): void {
+		for (const release of [...(this.#waiters.get(id) ?? [])]) release()
+	}
+}
+
 export type ActivityWatcher = {
 	/** Threads `amp top` currently lists, most recently updated first. */
 	current(): ActiveThread[]
+	/**
+	 * Waits for the thread's current agent turn to end. Resolves 'idle' at once if the
+	 * thread is not working now, 'ended' when its turn ends, 'timeout' after `timeoutMs`.
+	 */
+	waitForTurnEnd(id: string, timeoutMs: number): Promise<TurnWait>
 	stop(): void
+}
+
+/** Thread states derived from `amp top` snapshots; the part of the watcher that needs no child process. */
+export class ActivityTracker {
+	#known = new Map<string, ActiveThread>()
+	#latest: ActiveThread[] = []
+	#waiters = new TurnWaiters()
+
+	/** Folds in a snapshot, releases waiters of threads whose turn ended, and returns those threads. */
+	ingest(snapshot: TopSnapshot): ActiveThread[] {
+		if (!snapshot.reconnecting) this.#latest = snapshot.threads
+		const ended = applySnapshot(this.#known, snapshot)
+		for (const thread of ended) this.#waiters.ended(thread.id)
+		return ended
+	}
+
+	current = (): ActiveThread[] => this.#latest
+
+	waitForTurnEnd = (id: string, timeoutMs: number): Promise<TurnWait> =>
+		this.#known.get(id)?.working ? this.#waiters.wait(id, timeoutMs) : Promise.resolve('idle')
 }
 
 /**
@@ -37,8 +92,7 @@ export function watchActivity(options: {
 	onTurnEnded: (thread: ActiveThread) => void
 	log: (message: string) => void
 }): ActivityWatcher {
-	const known = new Map<string, ActiveThread>()
-	let latest: ActiveThread[] = []
+	const tracker = new ActivityTracker()
 	let stopped = false
 	let backoffMs = 1_000
 	let child: ReturnType<typeof spawn> | undefined
@@ -54,8 +108,7 @@ export function watchActivity(options: {
 				options.log(`amp top: ignoring unparsable line: ${line.slice(0, 200)}`)
 				return
 			}
-			if (!snapshot.reconnecting) latest = snapshot.threads
-			for (const thread of applySnapshot(known, snapshot)) options.onTurnEnded(thread)
+			for (const thread of tracker.ingest(snapshot)) options.onTurnEnded(thread)
 		})
 		child.stderr!.on('data', (chunk: Buffer) => options.log(`amp top: ${chunk.toString().trim()}`))
 		child.on('exit', (code) => {
@@ -69,7 +122,8 @@ export function watchActivity(options: {
 	start()
 
 	return {
-		current: () => latest,
+		current: tracker.current,
+		waitForTurnEnd: tracker.waitForTurnEnd,
 		stop() {
 			stopped = true
 			child?.kill()
