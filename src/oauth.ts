@@ -296,6 +296,7 @@ input[type=password]:focus-visible { outline:2px solid var(--accent); outline-of
 .actions { display:flex; gap:8px; margin-top:20px; }
 button { flex:1; padding:10px 14px; border-radius:8px; border:1px solid var(--line); background:transparent; color:inherit; font:inherit; font-weight:600; cursor:pointer; }
 button.primary { background:var(--accent); color:var(--accent-fg); border-color:var(--accent); }
+button.secondary { order:-1; }
 .meta { font-size:13px; margin:16px 0 0; }
 `
 
@@ -316,8 +317,9 @@ function consentPage(input: { query: string; clientName: string; redirectHost: s
 <input id="passphrase" name="passphrase" type="password" autocomplete="current-password" autofocus required>
 ${input.error ? `<p class="error" role="alert">${escapeHtml(input.error)}</p>` : ''}
 <div class="actions">
-<button type="submit" name="decision" value="deny" formnovalidate>Deny</button>
+<!-- Allow comes first so pressing Enter (which submits the first button) approves; CSS shows Deny on the left. -->
 <button type="submit" name="decision" value="approve" class="primary">Allow</button>
+<button type="submit" name="decision" value="deny" formnovalidate class="secondary">Deny</button>
 </div>
 </form>
 <p class="meta">You'll return to <strong>${escapeHtml(input.redirectHost)}</strong>. Served by Oberon.</p>

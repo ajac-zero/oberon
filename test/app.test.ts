@@ -112,7 +112,10 @@ test('OAuth: registration, passphrase consent, PKCE, single-use codes, refresh r
 	const { verifier, challenge } = pkce()
 	const consent = await fetch(`${base}/oauth/authorize?${new URLSearchParams({ response_type: 'code', client_id, redirect_uri: REDIRECT, code_challenge: challenge, code_challenge_method: 'S256', state: 'st8' })}`)
 	assert.equal(consent.status, 200)
-	assert.match(await consent.text(), /Oberon passphrase/)
+	const consentHtml = await consent.text()
+	assert.match(consentHtml, /Oberon passphrase/)
+	// Pressing Enter submits the first submit button, so it must be Allow, not Deny.
+	assert.equal(/name="decision" value="(\w+)"/.exec(consentHtml)?.[1], 'approve')
 	// Browsers apply form-action to the post-submit redirect: it must allow this client's redirect origin, and only that.
 	assert.match(consent.headers.get('content-security-policy')!, /form-action 'self' https:\/\/chatgpt\.com;/)
 
