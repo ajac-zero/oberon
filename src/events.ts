@@ -244,7 +244,10 @@ export class Subscriptions {
 			let outcome: string
 			try {
 				const res = await this.#send({ url: sub.url, body, headers: signedHeaders({ secrets: this.#activeSecrets(sub), messageId: eventId, body, subscriptionId, now: new Date(this.#now()) }) })
-				if (res.status >= 200 && res.status < 300) return
+				if (res.status >= 200 && res.status < 300) {
+					this.#log(`subscription ${subscriptionId}: delivered event ${eventId} (HTTP ${res.status}, attempt ${attempt + 1})`)
+					return
+				}
 				if (res.status === 410) {
 					this.#log(`subscription ${subscriptionId}: callback returned 410, removing`)
 					this.#store.update((state) => void delete state.subscriptions[subscriptionId])
