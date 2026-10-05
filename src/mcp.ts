@@ -14,6 +14,7 @@ const INSTRUCTIONS = `Amp is the user's coding agent. These tools are the way to
 An Amp thread is one agent conversation; it runs in an orb (cloud sandbox for a project) or on a runner (one of the user's machines).
 Read threads with search and fetch; check live status with list_active_threads.
 start_thread and send_message return at once while Amp keeps working. To act when the work is done, subscribe to the thread.turn_ended event instead of polling: use thread_id for one thread, or origin "oberon" to hear only about threads started through start_thread (not threads the user chats with directly). The event's outcome says whether the turn completed, errored, was cancelled, or needs_approval; the optional outcomes argument filters on it.
+A thread_id subscription is a one-off follow-up: after reporting the first event whose outcome is completed, error, or cancelled, stop monitoring (end the task) unless the user asked to keep watching that thread. After needs_approval, keep monitoring. Subscriptions without thread_id (e.g. origin "oberon" for all started work) are standing watches; keep them until the user stops them.
 If events do not fire in this client and a wait_for_thread tool is available, call it with the thread_id instead: it returns when the turn ends or after its timeout, and if finished is false, call it again. Never poll fetch in a loop to see whether a thread finished.
 Always give the user the thread URL. Do not send a message to the thread that triggered a thread.turn_ended event unless the user asked for that, to avoid loops.`
 
