@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto'
 import type { OriginStore } from './origins.ts'
 import type { TurnWait } from './activity.ts'
 import { outcomeOfState, threadUrl, type ActiveThread, type Amp, type ThreadDetail } from './amp.ts'
-import { TURN_ENDED, matchesOutcome, type Subscriptions, type TurnEndedPayload } from './events.ts'
+import { TURN_ENDED, matchesOutcome, type Subscription, type Subscriptions, type TurnEndedPayload } from './events.ts'
 
 const FINAL_MESSAGE_MAX = 16_000
 /** `amp top` reports idle a moment before `amp threads export` reflects the finished turn. */
@@ -87,12 +87,16 @@ export async function waitForThread(
 export async function publishTurnEnded(
 	deps: { amp: Amp; subscriptions: Subscriptions; origins: OriginStore; now?: () => Date; sleep?: (ms: number) => Promise<void> },
 	thread: ActiveThread,
+	/** Catch-up delivery: only these subscriptions, stamped with when the turn actually ended. */
+	only?: { subscriptionIds: ReadonlySet<string>; endedAt: Date },
 ): Promise<void> {
 	const origin = deps.origins.originOf(thread.id)
-	const candidates = deps.subscriptions.matching(TURN_ENDED, { thread_id: thread.id, project: thread.project, origin })
+	const candidates = deps.subscriptions
+		.matching(TURN_ENDED, { thread_id: thread.id, project: thread.project, origin })
+		.filter((s) => !only || only.subscriptionIds.has(s.id))
 	if (candidates.length === 0) return
 
-	const endedAt = (deps.now?.() ?? new Date()).toISOString()
+	const endedAt = (only?.endedAt ?? deps.now?.() ?? new Date()).toISOString()
 	const detail = await settledThreadDetail(deps, thread.id)
 	// Settling can time out in a state we don't recognize; report that as completed and keep the raw state in agent_state.
 	const agentState = detail.agentState ?? 'idle'
@@ -115,4 +119,47 @@ export async function publishTurnEnded(
 	const turnKey = detail.agentStateMessageId ?? detail.updatedAt
 	const eventId = `evt_${createHash('sha256').update(`${thread.id} ${turnKey}`).digest('hex').slice(0, 32)}`
 	await deps.subscriptions.deliver(targets, { eventId, name: TURN_ENDED, timestamp: endedAt, data })
+}
+
+/**
+ * Turns that ended in the last few minutes. Events are not replayable, so a
+ * `thread_id` subscription created right after `start_thread` (or while its
+ * callback was still being verified) would otherwise miss a fast turn and wait forever.
+ */
+export class RecentTurns {
+	readonly #turns = new Map<string, { thread: ActiveThread; endedAt: Date }>()
+	readonly #windowMs: number
+	readonly #now: () => Date
+
+	constructor(options: { windowMs?: number; now?: () => Date } = {}) {
+		this.#windowMs = options.windowMs ?? 2 * 60 * 1000
+		this.#now = options.now ?? (() => new Date())
+	}
+
+	record(thread: ActiveThread): void {
+		const now = this.#now()
+		for (const [id, turn] of this.#turns) if (now.getTime() - turn.endedAt.getTime() > this.#windowMs) this.#turns.delete(id)
+		this.#turns.set(thread.id, { thread, endedAt: now })
+	}
+
+	/** The thread's most recent turn end, if it was within the window. */
+	recent(threadId: string): { thread: ActiveThread; endedAt: Date } | undefined {
+		const turn = this.#turns.get(threadId)
+		return turn && this.#now().getTime() - turn.endedAt.getTime() <= this.#windowMs ? turn : undefined
+	}
+}
+
+/**
+ * Delivers a just-missed turn to a new or refreshed subscription. Only `thread_id`
+ * subscriptions catch up; a project- or origin-wide subscription would otherwise
+ * receive unrelated turns that ended before it existed.
+ */
+export function catchUpSubscription(
+	deps: Parameters<typeof publishTurnEnded>[0] & { recentTurns: RecentTurns },
+	subscription: Subscription,
+): Promise<void> {
+	const threadId = subscription.arguments.thread_id
+	const turn = threadId === undefined ? undefined : deps.recentTurns.recent(threadId)
+	if (!turn) return Promise.resolve()
+	return publishTurnEnded(deps, turn.thread, { subscriptionIds: new Set([subscription.id]), endedAt: turn.endedAt })
 }

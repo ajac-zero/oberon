@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
 import { toThreadDetail, type ActiveThread, type Amp, type ThreadDetail } from '../src/amp.ts'
-import { publishTurnEnded } from '../src/bridge.ts'
+import { catchUpSubscription, publishTurnEnded, RecentTurns } from '../src/bridge.ts'
 import { Subscriptions, TURN_ENDED, type SubscriptionState } from '../src/events.ts'
 import { emptyOriginState, OriginStore, type OriginState } from '../src/origins.ts'
 import { JsonFile } from '../src/store.ts'
@@ -153,4 +153,88 @@ test('threads stopped in error, cancelled, or awaiting states settle without a c
 	assert.equal(toDetail('idle', last('user')).settled, false, 'idle still needs the finished assistant message')
 	// Mid-turn states observed in real exports must not look settled, even with a completed assistant message.
 	for (const state of ['tool_use', 'running_tools', 'working', 'streaming', 'some_future_state']) assert.equal(toDetail(state, last('assistant', 'complete')).settled, false, state)
+})
+
+// ── Catch-up: a turn that ends before (or while) ChatGPT subscribes ─────────────
+
+/** Subscriptions wired like main.ts: onSubscribed runs the catch-up; the test awaits it. */
+function catchUpHarness(windowMs = 120_000) {
+	let clock = Date.parse('2026-10-05T19:18:58Z')
+	const now = () => new Date(clock)
+	const sent: WebhookRequest[] = []
+	const recentTurns = new RecentTurns({ windowMs, now })
+	const origins = new OriginStore(new JsonFile<OriginState>(undefined, emptyOriginState()))
+	const amp = { threadDetail: async () => detail({ lastAssistantText: 'Soft rain taps the leaves' }) } as unknown as Amp
+	const pending: Promise<void>[] = []
+	const subscriptions: Subscriptions = new Subscriptions({
+		store: new JsonFile<SubscriptionState>(undefined, { subscriptions: {}, verifiedCallbacks: {} }),
+		now: () => clock,
+		send: async (req) => {
+			sent.push(req)
+			const body = JSON.parse(req.body)
+			return { status: 200, body: body.type === 'verification' ? JSON.stringify({ challenge: body.challenge }) : '' }
+		},
+		onSubscribed: (s) => void pending.push(catchUpSubscription({ amp, subscriptions, origins, recentTurns, now }, s)),
+	})
+	const subscribe = async (args: Record<string, unknown>, url = 'https://connectors.example.com/cb') => {
+		const result = await subscriptions.subscribe('owner', { name: TURN_ENDED, arguments: args, delivery: { mode: 'webhook', url, secret: `whsec_${Buffer.alloc(32, 9).toString('base64')}` } })
+		await Promise.all(pending)
+		return result
+	}
+	return {
+		subscriptions,
+		origins,
+		recentTurns,
+		subscribe,
+		advance: (ms: number) => void (clock += ms),
+		events: () => sent.filter((r) => !JSON.parse(r.body).type).map((r) => ({ to: r.headers['x-mcp-subscription-id'], ...JSON.parse(r.body) })),
+		publish: (t: ActiveThread) => publishTurnEnded({ amp, subscriptions, origins, now }, t),
+	}
+}
+
+test('a thread_id subscription created just after its turn ended still gets that turn', async () => {
+	const h = catchUpHarness()
+	// The turn ends while nobody is subscribed: the normal path delivers nothing.
+	h.recentTurns.record(thread)
+	await h.publish(thread)
+	assert.equal(h.events().length, 0)
+	h.advance(500)
+	const sub = await h.subscribe({ thread_id: ID })
+	assert.equal(h.events().length, 1)
+	assert.equal(h.events()[0].to, sub.id)
+	assert.equal(h.events()[0].data.final_message, 'Soft rain taps the leaves')
+	assert.equal(h.events()[0].timestamp, '2026-10-05T19:18:58.000Z', 'stamped with when the turn ended, not when it was caught up')
+})
+
+test('catch-up honours the subscription filters', async () => {
+	const h = catchUpHarness()
+	h.recentTurns.record(thread)
+	await h.subscribe({ thread_id: ID, origin: 'oberon' })
+	assert.equal(h.events().length, 0, 'thread was not started through Oberon')
+	h.origins.record(ID)
+	await h.subscribe({ thread_id: ID, origin: 'oberon' }, 'https://connectors.example.com/cb2')
+	assert.equal(h.events().length, 1)
+})
+
+test('no catch-up for old turns, other threads, or subscriptions without thread_id', async () => {
+	const h = catchUpHarness(120_000)
+	h.recentTurns.record(thread)
+	h.advance(121_000)
+	await h.subscribe({ thread_id: ID })
+	await h.subscribe({ thread_id: 'T-00000000-0000-0000-0000-000000000000' }, 'https://connectors.example.com/other')
+	h.advance(-121_000)
+	await h.subscribe({ project: 'amp-mcp' }, 'https://connectors.example.com/project')
+	await h.subscribe({}, 'https://connectors.example.com/all')
+	assert.equal(h.events().length, 0)
+})
+
+test('catch-up goes only to the new subscription, not to existing ones that already had their chance', async () => {
+	const h = catchUpHarness()
+	const early = await h.subscribe({ project: 'amp-mcp' }, 'https://connectors.example.com/early')
+	h.recentTurns.record(thread)
+	await h.publish(thread)
+	assert.deepEqual(h.events().map((e) => e.to), [early.id])
+	const late = await h.subscribe({ thread_id: ID }, 'https://connectors.example.com/late')
+	assert.deepEqual(h.events().map((e) => e.to), [early.id, late.id])
+	assert.equal(h.events()[0].eventId, h.events()[1].eventId, 'same turn, same event ID')
 })

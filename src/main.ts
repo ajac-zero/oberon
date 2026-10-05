@@ -2,7 +2,7 @@ import { join } from 'node:path'
 import { watchActivity } from './activity.ts'
 import { createAmpCli } from './amp.ts'
 import { createApp } from './app.ts'
-import { publishTurnEnded } from './bridge.ts'
+import { catchUpSubscription, publishTurnEnded, RecentTurns } from './bridge.ts'
 import { loadConfig } from './config.ts'
 import { Subscriptions, type SubscriptionState } from './events.ts'
 import { emptyOriginState, OriginStore, type OriginState } from './origins.ts'
@@ -14,10 +14,16 @@ const log = (message: string) => console.error(`${new Date().toISOString()} ${me
 
 const config = loadConfig()
 const amp = createAmpCli({ bin: config.ampBin, label: config.threadLabel })
-const subscriptions = new Subscriptions({
+const recentTurns = new RecentTurns()
+const subscriptions: Subscriptions = new Subscriptions({
 	store: new JsonFile<SubscriptionState>(join(config.dataDir, 'subscriptions.json'), { subscriptions: {}, verifiedCallbacks: {} }),
 	send: sendWebhook,
 	log,
+	// Deliver a turn that ended just before the subscription existed. Deferred so ChatGPT gets the subscribe response first.
+	onSubscribed: (subscription) =>
+		void setTimeout(() => {
+			catchUpSubscription({ amp, subscriptions, origins, recentTurns }, subscription).catch((error: Error) => log(`catch-up ${subscription.id}: ${error.message}`))
+		}, 1_000),
 })
 const origins = new OriginStore(new JsonFile<OriginState>(join(config.dataDir, 'origins.json'), emptyOriginState()))
 const auth = createAuthServer({
@@ -31,6 +37,7 @@ const activity = watchActivity({
 	log,
 	onTurnEnded: (thread) => {
 		log(`turn ended: ${thread.id} (${thread.title})`)
+		recentTurns.record(thread)
 		publishTurnEnded({ amp, subscriptions, origins }, thread).catch((error: Error) => log(`publish ${thread.id}: ${error.message}`))
 	},
 })

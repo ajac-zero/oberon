@@ -160,6 +160,7 @@ export class Subscriptions {
 	readonly #now: () => number
 	readonly #sleep: (ms: number) => Promise<void>
 	readonly #log: (message: string) => void
+	readonly #onSubscribed: (subscription: Subscription) => void
 
 	constructor(options: {
 		store: JsonFile<SubscriptionState>
@@ -167,12 +168,15 @@ export class Subscriptions {
 		now?: () => number
 		sleep?: (ms: number) => Promise<void>
 		log?: (message: string) => void
+		/** Called after a subscription is created or refreshed, e.g. to deliver a turn that ended moments before. */
+		onSubscribed?: (subscription: Subscription) => void
 	}) {
 		this.#store = options.store
 		this.#send = options.send
 		this.#now = options.now ?? Date.now
 		this.#sleep = options.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)))
 		this.#log = options.log ?? (() => {})
+		this.#onSubscribed = options.onSubscribed ?? (() => {})
 	}
 
 	async subscribe(principal: string, raw: unknown) {
@@ -207,6 +211,7 @@ export class Subscriptions {
 				expiresAt,
 			}
 		})
+		this.#onSubscribed(this.#store.value.subscriptions[id]!)
 		return { id, refreshBefore: new Date(expiresAt).toISOString(), cursor: null, truncated: false }
 	}
 
